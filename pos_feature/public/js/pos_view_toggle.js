@@ -1,7 +1,53 @@
 (() => {
   const KEY = "pos_item_view_mode";
-  const getMode = () => localStorage.getItem(KEY) || "grid";
-  const setMode = (m) => localStorage.setItem(KEY, m);
+
+  // ---------- Safe Storage ----------
+  const SafeStorage = (() => {
+    let memory = {};
+
+    function canUse(storage) {
+      try {
+        if (!storage) return false;
+        const testKey = "__pos_test__";
+        storage.setItem(testKey, "1");
+        storage.removeItem(testKey);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    const lsOk = canUse(window.localStorage);
+    const ssOk = canUse(window.sessionStorage);
+
+    function get(key) {
+      try {
+        if (lsOk) return window.localStorage.getItem(key);
+      } catch (e) {}
+      try {
+        if (ssOk) return window.sessionStorage.getItem(key);
+      } catch (e) {}
+      return key in memory ? memory[key] : null;
+    }
+
+    function set(key, val) {
+      const v = String(val);
+      try {
+        if (lsOk) return window.localStorage.setItem(key, v);
+      } catch (e) {}
+      try {
+        if (ssOk) return window.sessionStorage.setItem(key, v);
+      } catch (e) {}
+      memory[key] = v;
+    }
+
+    return { get, set };
+  })();
+
+  const getMode = () => SafeStorage.get(KEY) || "grid";
+  const setMode = (m) => SafeStorage.set(KEY, m);
+
+  // ---------------- your existing code below ----------------
 
   function findByExactText(txt) {
     const nodes = Array.from(
@@ -107,7 +153,6 @@
     root.style.setProperty("grid-auto-flow", "row", "important");
 
     Array.from(root.children).forEach((card) => {
-      // mark cards we touched so we can reset later
       card.setAttribute("data-pos-card-touched", "1");
 
       card.style.setProperty("width", "100%", "important");
@@ -123,13 +168,11 @@
       card.style.setProperty("padding", "10px 16px", "important");
       card.style.setProperty("overflow", "hidden", "important");
 
-      // ✅ Hide <img> only in list mode (mark for restore)
       card.querySelectorAll("img").forEach((img) => {
         img.setAttribute("data-pos-hidden", "1");
         img.style.setProperty("display", "none", "important");
       });
 
-      // ✅ Hide background-image thumbnails only in list mode (mark for restore)
       card.querySelectorAll("*").forEach((el) => {
         const bg = window.getComputedStyle(el).backgroundImage;
         if (bg && bg !== "none") {
@@ -150,7 +193,6 @@
         last.style.setProperty("flex", "0 0 auto", "important");
       }
 
-      // find info wrapper by ₹
       const children = Array.from(card.children);
       const info =
         children.find((el) => (el.innerText || "").includes("₹")) ||
@@ -177,7 +219,7 @@
     });
   }
 
-  // --------- GRID MODE (restore thumbnails/images) ---------
+  // --------- GRID MODE ---------
   function applyGridMode() {
     document.body.classList.remove("pos-list-view");
 
@@ -186,14 +228,12 @@
 
     root.removeAttribute("data-pos-items-grid-root");
 
-    // remove root inline styles set by list mode
     root.style.removeProperty("display");
     root.style.removeProperty("flex-direction");
     root.style.removeProperty("gap");
     root.style.removeProperty("grid-template-columns");
     root.style.removeProperty("grid-auto-flow");
 
-    // ✅ restore only what we hid
     root.querySelectorAll('[data-pos-hidden="1"]').forEach((el) => {
       el.removeAttribute("data-pos-hidden");
       el.style.removeProperty("display");
@@ -204,10 +244,9 @@
       el.style.removeProperty("background-image");
     });
 
-    // ✅ reset only cards we touched
     root.querySelectorAll('[data-pos-card-touched="1"]').forEach((card) => {
       card.removeAttribute("data-pos-card-touched");
-      card.removeAttribute("style"); // safe: only for item cards inside All Items
+      card.removeAttribute("style");
     });
   }
 
@@ -270,6 +309,9 @@
   }
 
   function runIfPOS() {
+    // Guard: frappe might not exist at the moment this file is evaluated
+    if (!window.frappe) return;
+
     const route = (frappe.get_route && frappe.get_route()) || [];
     if (!route.length || route[0] !== "point-of-sale") return;
     waitAndInject();
