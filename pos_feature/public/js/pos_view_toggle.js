@@ -1,3 +1,4 @@
+console.log("POS TOGGLE LOADED", new Date().toISOString());
 (() => {
   const KEY = "pos_item_view_mode";
 
@@ -49,7 +50,7 @@
     if (!title) return null;
 
     let el = title;
-    for (let i = 0; i < 16 && el; i++) {
+    for (let i = 0; i < 18 && el; i++) {
       el = el.parentElement;
       if (!el) break;
       const hasInputs = el.querySelector("input,select,.form-control");
@@ -58,14 +59,14 @@
     return title.parentElement || null;
   }
 
-  // cleanup from older versions
   function cleanupLegacyInlineStyles() {
     const markers = [
       '[data-pos-items-grid-root="1"]',
       '[data-pos-items-root="1"]',
       '[data-pos-card-touched="1"]',
       '[data-pos-hidden="1"]',
-      '[data-pos-thumb="1"]'
+      '[data-pos-thumb="1"]',
+      '[data-pos-item-card="1"]'
     ];
 
     document.querySelectorAll(markers.join(",")).forEach((el) => {
@@ -74,7 +75,8 @@
       el.removeAttribute("data-pos-card-touched");
       el.removeAttribute("data-pos-hidden");
       el.removeAttribute("data-pos-thumb");
-      // only remove known problematic props
+      el.removeAttribute("data-pos-item-card");
+
       [
         "display","flex-direction","gap","grid-template-columns","grid-auto-flow",
         "width","max-width","height","min-height","padding","overflow",
@@ -123,56 +125,71 @@
     return best;
   }
 
-  // ---------- THE FIX: detect thumbnail block by geometry and hide it ----------
-  function markThumbsByGeometry(root) {
+  // ✅ NEW: mark only real item rows (avoid virtual-scroll spacer / placeholders)
+  function markItemCards(root) {
     if (!root) return;
 
-    const cards = Array.from(root.children).filter((x) => x && x.getBoundingClientRect);
+    Array.from(root.children).forEach((row) => {
+      row.removeAttribute("data-pos-item-card");
+
+      const t = (row.innerText || "").trim();
+
+      // Real items almost always contain price/currency or common UOM text
+      const looksLikeItem =
+        t.includes("₹") ||
+        /\bNOS\b|\bKGS\b|\bPCS\b|\bKG\b|\bLTR\b|\bL\b/i.test(t);
+
+      if (looksLikeItem) row.setAttribute("data-pos-item-card", "1");
+    });
+  }
+
+  // ✅ Robust thumb detection: pick the LEFT-MOST narrow block inside each REAL card
+  function markThumbs(root) {
+    if (!root) return;
+
+    const cards = Array.from(root.children).filter((x) => x && x.getAttribute && x.getAttribute("data-pos-item-card") === "1");
     for (const card of cards) {
-      // clear previous marks inside this card
       card.querySelectorAll('[data-pos-thumb="1"]').forEach((x) => x.removeAttribute("data-pos-thumb"));
 
       const cardRect = card.getBoundingClientRect();
       if (!cardRect.width || !cardRect.height) continue;
 
-      // Find best "thumb" candidate
-      // Criteria: left side, narrow, tall-ish, short text
-      const nodes = Array.from(card.querySelectorAll("div,span"))
-        .filter((n) => n && n.getBoundingClientRect);
+      const nodes = Array.from(card.querySelectorAll("div,span,section"))
+        .filter((n) => n !== card && n.getBoundingClientRect);
 
       let best = null;
-      let bestScore = -1;
+      let bestScore = Infinity;
 
       for (const n of nodes) {
         const r = n.getBoundingClientRect();
-        if (r.width < 20 || r.height < 20) continue;
+        if (r.width < 15 || r.height < 15) continue;
 
-        // Must be inside card
+        // inside card
         if (r.left < cardRect.left - 1 || r.right > cardRect.right + 1) continue;
         if (r.top < cardRect.top - 1 || r.bottom > cardRect.bottom + 1) continue;
 
-        // Thumb-like geometry
-        const isLeft = (r.left - cardRect.left) <= 40;      // near left edge
-        const isNarrow = r.width <= 140;                    // thumb column
-        const isTall = r.height >= Math.min(80, cardRect.height * 0.6);
+        const leftOffset = r.left - cardRect.left;
+
+        // thumb-ish: near left, narrow-ish, and reasonably tall
+        const isLeft = leftOffset <= 90;
+        const isNarrow = r.width <= 220;
+        const isTall = r.height >= Math.min(60, cardRect.height * 0.4);
 
         if (!isLeft || !isNarrow || !isTall) continue;
 
-        const text = (n.innerText || "").trim();
-        const shortText = text.length > 0 && text.length <= 4; // "F", "SS", "B1"
-        const cs = window.getComputedStyle(n);
-        const hasBg = cs.backgroundColor !== "rgba(0, 0, 0, 0)" || (cs.backgroundImage && cs.backgroundImage !== "none");
-        const looksLikeThumb = shortText || hasBg;
+        // prefer blocks that look like a thumb (bg/img/short text)
+        const cs = getComputedStyle(n);
+        const hasBg = (cs.backgroundImage && cs.backgroundImage !== "none") ||
+                      (cs.backgroundColor && cs.backgroundColor !== "rgba(0, 0, 0, 0)");
+        const hasImg = !!n.querySelector("img");
+        const txt = (n.innerText || "").trim();
+        const hasShortTxt = txt.length > 0 && txt.length <= 5;
 
-        if (!looksLikeThumb) continue;
+        // score: left-most wins; add small penalties if it doesn't look like thumb
+        let score = leftOffset;
+        if (!(hasBg || hasImg || hasShortTxt)) score += 50;
 
-        // Score: prefer closer to left, taller, narrower
-        const leftScore = Math.max(0, 40 - (r.left - cardRect.left));
-        const tallScore = Math.min(100, (r.height / cardRect.height) * 100);
-        const narrowScore = Math.max(0, 140 - r.width);
-
-        const score = leftScore + tallScore + narrowScore + (shortText ? 50 : 0);
-        if (score > bestScore) {
+        if (score < bestScore) {
           bestScore = score;
           best = n;
         }
@@ -189,14 +206,9 @@
     const style = document.createElement("style");
     style.id = "pos-view-style";
     style.textContent = `
-      /* Toggle UI */
       .pos-view-toggle-wrap {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        margin-left: 12px;
-        vertical-align: middle;
-        user-select: none;
+        display: inline-flex; align-items: center; gap: 8px;
+        margin-left: 12px; vertical-align: middle; user-select: none;
       }
       .pos-view-toggle-label { font-size: 12px; opacity: .8; }
       .pos-view-switch { position: relative; width: 42px; height: 22px; display: inline-block; }
@@ -213,37 +225,46 @@
       .pos-view-switch input:checked + .pos-view-slider { background-color: var(--primary); }
       .pos-view-switch input:checked + .pos-view-slider:before { transform: translateX(20px); }
 
-      /* LIST VIEW container */
+      /* List layout container */
       body.pos-list-view [data-pos-items-root="1"]{
         display: flex !important;
         flex-direction: column !important;
         gap: 10px !important;
       }
 
-      /* LIST VIEW card layout */
-      body.pos-list-view [data-pos-items-root="1"] > *{
+      /* ✅ Apply list-card styling ONLY to real item cards (prevents blank spacer panel) */
+      body.pos-list-view [data-pos-items-root="1"] > [data-pos-item-card="1"]{
         width: 100% !important;
         max-width: 100% !important;
         height: auto !important;
 
         display: flex !important;
         flex-direction: row !important;
-        align-items: center !important;
+        align-items: flex-start !important;
         justify-content: space-between !important;
         gap: 12px !important;
 
         padding: 10px 14px !important;
       }
 
-      /* ✅ OPTION 2: hide the thumbnail/letter block we detected */
-      body.pos-list-view [data-pos-items-root="1"] [data-pos-thumb="1"]{
+      /* ✅ Hide detected thumb block only inside All Items list view */
+      body.pos-list-view [data-pos-items-root="1"] > [data-pos-item-card="1"] [data-pos-thumb="1"]{
         display: none !important;
       }
 
-      /* Also hide img tags if any */
-      body.pos-list-view [data-pos-items-root="1"] img{ display:none !important; }
+      /* (safe) hide img tags too, but only inside real item cards */
+      body.pos-list-view [data-pos-items-root="1"] > [data-pos-item-card="1"] img{
+        display:none !important;
+      }
     `;
     document.head.appendChild(style);
+  }
+
+  function rescan() {
+    if (!document.body.classList.contains("pos-list-view")) return;
+    const root = findItemsRoot();
+    markItemCards(root);
+    markThumbs(root);
   }
 
   // ---------- Mode apply ----------
@@ -252,11 +273,9 @@
 
     if (mode === "list") {
       document.body.classList.add("pos-list-view");
-      // IMPORTANT: after DOM paints, mark thumbs by geometry
-      requestAnimationFrame(() => {
-        const r = findItemsRoot();
-        markThumbsByGeometry(r);
-      });
+      requestAnimationFrame(rescan);
+      setTimeout(rescan, 250);  // after async render
+      setTimeout(rescan, 800);  // after lazy paint
     } else {
       document.body.classList.remove("pos-list-view");
       cleanupLegacyInlineStyles();
@@ -264,7 +283,7 @@
     }
   }
 
-  // ---------- Observer (Cloud rerender safe) ----------
+  // ---------- Observer + scroll/resize for cloud re-renders ----------
   let obs = null;
   let raf = 0;
   function startObserver() {
@@ -274,14 +293,13 @@
       if (raf) return;
       raf = requestAnimationFrame(() => {
         raf = 0;
-        if (document.body.classList.contains("pos-list-view")) {
-          const root = findItemsRoot();
-          markThumbsByGeometry(root);
-        }
+        rescan();
       });
     });
 
     obs.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener("scroll", () => requestAnimationFrame(rescan), { passive: true });
+    window.addEventListener("resize", () => requestAnimationFrame(rescan), { passive: true });
   }
 
   function injectToggle() {
@@ -324,7 +342,6 @@
 
   function waitAndInject() {
     if (injectToggle()) return;
-
     const mo = new MutationObserver(() => {
       if (injectToggle()) mo.disconnect();
     });
