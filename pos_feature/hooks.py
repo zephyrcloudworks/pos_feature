@@ -30,6 +30,9 @@ app_license = "mit"
 
 # app_include_js = "/assets/pos_feature/js/pos_feature.js"
 # app_include_js = "/assets/pos_feature/js/pos_view_toggle.js"
+app_include_js = [
+  "/assets/pos_feature/js/pos_view_toggle.js"
+]
 
 # include js, css files in header of web template
 # web_include_css = "/assets/pos_feature/css/pos_feature.css"
@@ -44,7 +47,7 @@ app_license = "mit"
 
 # include js in page
 # page_js = {"page" : "public/js/file.js"}
-page_js = {"point-of-sale" : "public/js/pos_view_toggle.js"}
+# page_js = {"point-of-sale" : "public/js/pos_view_toggle.js"}
 
 
 # include js in doctype views
